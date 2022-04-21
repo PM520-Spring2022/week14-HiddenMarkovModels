@@ -1,0 +1,157 @@
+---
+title: "HMMs"
+author: "Paul M"
+date: "4/21/2022"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+This example looks at a casino that rolls two types of dice, one fair and one unfair. It is based on example taken from http://web.stanford.edu/class/stats366/hmmR2.html
+
+We start with some set-up, including the numnber of die rolls we wish to simulate, and the transition and emission ("observation") matricies::
+```{r}
+#install.packages('HMM')
+library('HMM') 
+set.seed(985)
+require(HMM)
+nSim = 2000
+States = c("Fair", "Unfair")
+Symbols = 1:6
+# Define the transition matrix
+transProbs = matrix(c(0.99, 0.01, 0.02, 0.98), c(length(States),length(States)), byrow = TRUE)
+# Define the emission probabilities
+emissionProbs = matrix(c(rep(1/6, 6), c(rep(0.1, 5), 0.5)),c(length(States), length(Symbols)), byrow = TRUE)
+```
+
+Now we use the HMM library tet up the HMM. We start by initializing the HMM object and simulating some data to analyze:
+```{r setupHMM}
+hmm = initHMM(States, Symbols, transProbs = transProbs, emissionProbs = emissionProbs)
+# Simulate some test data to play with
+sim = simHMM(hmm, nSim)
+# the resulting die-rolls are stored in sim$observation
+plot(sim$observation,pch='.')
+# the sequence recording which die was rolled is stored in sim$states. Let's look at the first few values
+plot(sim$observation[1:100],pch='+')
+```
+
+We next find the most probable sequence of underlying states using a viterbi algorithm. The first argument is the name of your HMM; the second is the sequence of observed states you want to analyze:
+```{r viterbi}
+vit = viterbi(hmm, sim$observation)   
+```
+
+Now we compute the (log) forward probabilities. The forward probability for state X up to observation at time k is defined as the probability of observing the 
+sequence of observations $e_1, ... ,e_k$ and that the state at time $k$ is $X$. 
+That is:
+$$f[X,k] := Prob(E_1 = e_1, ... , E_k = e_k , X_k = X),$$
+where $E_1...E_n = e_1...e_n$ is the sequence of observed emissions and $X_k$ is a random variable that represents the state at time $k$.
+```{r forwardprobs}
+f = forward(hmm, sim$observation)
+```
+
+Now compute the (log) backward probabilities. The backward probability for state $X$ and observation at time $k$ is defined as the probability of observing the 
+sequence of observations $e_{k+1}, ... ,e_{n}$ under the condition that the state at time $k$ is $X$. That is:
+$$ b[X,k] := Prob(E_{k+1} = e_{k+1}, ... , E_n = e_n | X_k = X),$$
+where $E_1...E_n = e_1...e_n$ is the sequence of observed emissions and $X_k$ is a random variable that represents the state at time $k$.
+```{r backwardprobs}
+b = backward(hmm, sim$observation)
+```
+
+Now we can calculate posterior probabilities of being in underlying states:
+```{r probs}
+i <- f[1, nSim]
+j <- f[2, nSim]
+probObservations = (i + log(1 + exp(j - i)))
+posterior = exp((f + b) - probObservations)
+```
+
+That showed you how to do it 'long-hand'.
+The same results can be obtained directly using the "posterior()" function:
+```{r direct}
+direct_posterior <- posterior(hmm,sim$observation)
+```
+
+Combine all the results into a single list, create some labels for the plots:
+```{r rplotsetup}
+x = list(hmm = hmm, sim = sim, vit = vit, posterior = posterior)
+
+mn = "Fair and unfair die"
+xlb = "Throw number"
+ylb = ""
+```
+
+We now make a very fancy plot to show what is going on. It has several components:
+1.  We plot the sequence of observed states and plot the dice that was used at each throw - we use green to represent the fair dice.  
+2.  Plot the most probable sequence of underlying true states (i.e. which die was used at each roll) calculated by the viterbi call.  
+3.  We show where those two plots differ.  
+4.  We plot the marginal posterior probability that we are using the unfair dice at each step.  
+5.  We show when the posterior probs infer the wrong underlying state:  
+```{r}
+# part 1 of the plot
+plot(x$sim$observation, ylim = c(-7.5, 6), pch = 3, main = mn,
+     xlab = xlb, ylab = ylb, bty = "n", yaxt = "n")
+axis(2, at = 1:6)
+
+text(0, -1.4, adj = 0, cex = 0.8, col = "black", "True: green = fair die")
+for (i in 1:nSim) {
+  if (x$sim$states[i] == "Fair")
+    rect(i, -1, i + 1, 0, col = "green", border = NA)
+  else rect(i, -1, i + 1, 0, col = "red", border = NA)
+}
+
+# part 2 of the plot
+text(0, -3.4, adj = 0, cex = 0.8, col = "black", "Most probable path")
+for (i in 1:nSim) {
+  if (x$vit[i] == "Fair")
+    rect(i, -3, i + 1, -2, col = "green", border = NA)
+  else rect(i, -3, i + 1, -2, col = "red", border = NA)
+}
+
+# part 3 of the plot
+text(0, -5.4, adj = 0, cex = 0.8, col = "black", "Difference")
+differing = !(x$sim$states == x$vit)
+for (i in 1:nSim) {
+  if (differing[i]) # the states differ
+    rect(i, -5, i + 1, -4, col = rgb(0.3, 0.3, 0.3),border = NA)
+  else rect(i, -5, i + 1, -4, col = rgb(0.9, 0.9, 0.9),border = NA)
+}
+
+# part 4 of plot
+points(x$posterior[2, ] - 3, type = "l")
+
+# part 5 of the plot
+text(0, -7.4, adj = 0, cex = 0.8, col = "black", "Difference by posterior-probability")
+differing = !(x$sim$states == x$vit)
+for (i in 1:nSim) {
+  if (posterior[1, i] > 0.5) {
+    if (x$sim$states[i] == "Fair")
+      rect(i, -7, i + 1, -6, col = rgb(0.9, 0.9, 0.9),
+           border = NA)
+    else rect(i, -7, i + 1, -6, col = rgb(0.3, 0.3, 0.3),
+              border = NA)
+  }
+  else {
+    if (x$sim$states[i] == "Unfair")
+      rect(i, -7, i + 1, -6, col = rgb(0.9, 0.9, 0.9),
+           border = NA)
+    else rect(i, -7, i + 1, -6, col = rgb(0.3, 0.3, 0.3),
+              border = NA)
+  }
+}
+```
+
+Finally we compare actual and estimated transition probabilities. We run the Baum-Welch algorithm to do this. Note that for more complex models this can take quite a while to do!
+```{r BaumWelch}
+# Baum-Welch
+bw3 = baumWelch(hmm,sim$observation,maxIterations=100,pseudoCount=0)
+
+# Start by vectorizing both matrices
+Act<-c(hmm$transProbs)
+Est<-c(bw3$hmm$transProbs)
+plot(Act,Est)
+abline(0,1,lty=2)
+```
